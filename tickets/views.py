@@ -1,11 +1,11 @@
 from django.db import DatabaseError
-from django.http import Http404, HttpResponse
+from django.http import Http404
 from rest_framework import viewsets, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from tickets.models import (
-    Event, 
+    Event,
     Ticket,
     TicketType,
     TicketPurchase
@@ -90,7 +90,7 @@ class TicketPurchaseAPI(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         elif (ticket_amount < quantity):
             # Not enough tickets left
-            return HttpResponse('We do not have that many tickets on stock!\
+            return Response('We do not have that many tickets on stock!\
                                 Please reduce the number of tickets to buy')
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -99,6 +99,7 @@ class TicketDetailAPI(APIView):
     """
     Retrieve, update or delete a purchased ticket instance.
     """
+    http_method_names = ['post', 'put', 'get', ]
 
     def get_object(self, pk):
         try:
@@ -118,16 +119,18 @@ class TicketDetailAPI(APIView):
 
         if not ticket.is_expired:
             if ticket.total_price == amount and ticket.status != 'paid':
+                # At this point would be best to disable PUT method
                 ticket.status = 'paid'
                 try:
                     ticket.save()
                 except DatabaseError as e:
-                    return HttpResponse('Could not finish payment properly.\
+                    return Response('Could not finish payment properly.\
                                         Please try again')
                 return Response(charge(amount, token))
             else:
-                return HttpResponse(
-                    'Wrong amount of money. Please check the total price'
+                return Response(
+                    'Ticker already paid or wrong amount of money.\
+                    Please check the total price'
                 )
         else:
             # Free reserved tickets
@@ -139,7 +142,7 @@ class TicketDetailAPI(APIView):
             )
             # Remove related (reserved) ticket
             ticket.delete()
-            return HttpResponse('Reservation for the tickets expired')
+            return Response('Reservation for the tickets expired')
 
     def get(self, request, pk, format=None):
         ticket = self.get_object(pk)
@@ -153,9 +156,41 @@ class TicketDetailAPI(APIView):
             data=request.data,
             partial=True
         )
-        if serializer.is_valid(raise_exception=True):
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+        if serializer.is_valid(raise_exception=True) and\
+           not old_ticket.is_expired and old_ticket.status == 'pending':
+            if request.data.get('quantity'):
+                # Check if tickets are availeble
+                # Update the price and quantity
+                bought_ticket = Ticket.objects.get(pk=old_ticket.ticket)
+                ticket_amount = int(bought_ticket.ticket_type.amount)
+                request_quantity = int(request.data.get('quantity'))
+                difference = old_ticket.quantity - request_quantity
+
+                if ticket_amount >= difference:
+                    serializer.save()
+                    # Update the final price
+                    update_price(
+                        old_ticket.email,
+                        request_quantity,
+                        bought_ticket.ticket_type.price
+                    )
+                    # Update the tickets amount
+                    update_tickets_quantity(
+                        bought_ticket.ticket_type.id,
+                        difference,
+                        ticket_amount
+                    )
+                    return Response(serializer.data, status=status.HTTP_200_OK)
+                else:
+                    Response('There is no enough tickets! Sorry')
+            elif request.data.get('email'):
+                # Change email value
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            else:
+                return Response('Not valid operation')
+        else:
+            return Response('Not valid operation!')
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk, format=None):

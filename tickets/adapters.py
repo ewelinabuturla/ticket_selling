@@ -18,6 +18,13 @@ supported_currencies = ('EUR')
 
 
 def charge(amount, token, currency='EUR'):
+    """
+    Charges the total amount of purchased tickets.
+
+    :param amount: <class 'float'>
+    :param token: <class 'str'>
+    :param currency: <class 'str'>
+    """
     if token == 'card_error':
         raise CardError('Your card has been declined')
     elif token == 'payment_error' or token == '':
